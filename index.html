@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Neon Fist - Mobile Ready</title>
+    <style>
+        body {
+            margin: 0; background-color: #0d0d1a; color: white;
+            font-family: 'Segoe UI', sans-serif; overflow: hidden;
+            touch-action: none; /* Prevents mobile scrolling */
+        }
+
+        /* UI overlays */
+        #game-ui { position: absolute; width: 100vw; height: 100vh; pointer-events: none; }
+        
+        /* Health Bars */
+        .health-wrapper {
+            position: absolute; top: 20px; width: 40%; height: 20px;
+            background: rgba(255,255,255,0.1); border: 2px solid rgba(255,255,255,0.5);
+        }
+        #p1-health-wrapper { left: 5%; }
+        #p2-health-wrapper { right: 5%; }
+        .health-bar { height: 100%; transition: width 0.2s; }
+        #p1-health { background: #ff0055; width: 100%; box-shadow: 0 0 10px #ff0055; }
+        #p2-health { background: #00f3ff; width: 100%; box-shadow: 0 0 10px #00f3ff; float: right; }
+
+        /* Screens */
+        .screen {
+            position: absolute; top: 0; left: 0; width: 100vw; height: 100vh;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: rgba(13, 13, 26, 0.9); z-index: 20; pointer-events: auto;
+        }
+        h1 { font-size: 3rem; text-shadow: 0 0 20px #ff0055; margin-bottom: 20px;}
+        button {
+            padding: 15px 40px; font-size: 1.5rem; background: transparent;
+            color: white; border: 2px solid #00f3ff; border-radius: 8px;
+            box-shadow: 0 0 10px #00f3ff; cursor: pointer; text-transform: uppercase;
+        }
+
+        /* Mobile Controls */
+        #mobile-controls {
+            position: absolute; bottom: 20px; width: 100%; display: none;
+            justify-content: space-between; padding: 0 20px; box-sizing: border-box; pointer-events: auto;
+        }
+        .d-pad, .action-pad { display: flex; gap: 10px; }
+        .btn {
+            width: 60px; height: 60px; background: rgba(255,255,255,0.1);
+            border: 2px solid #00f3ff; border-radius: 50%; display: flex;
+            justify-content: center; align-items: center; font-size: 24px; user-select: none;
+        }
+        .btn:active { background: rgba(0, 243, 255, 0.4); }
+
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+
+    <div id="start-screen" class="screen">
+        <h1>NEON FIST</h1>
+        <button onclick="startGame()">Start Arcade Mode</button>
+    </div>
+    
+    <div id="game-over-screen" class="screen" style="display: none;">
+        <h1 id="winner-text">GAME OVER</h1>
+        <button onclick="resetGame()">Play Again</button>
+    </div>
+
+    <div id="game-ui" style="display: none;">
+        <div id="p1-health-wrapper" class="health-wrapper"><div id="p1-health" class="health-bar"></div></div>
+        <div id="p2-health-wrapper" class="health-wrapper"><div id="p2-health" class="health-bar"></div></div>
+
+        <div id="mobile-controls">
+            <div class="d-pad">
+                <div class="btn" id="btn-left">◀</div>
+                <div class="btn" id="btn-right">▶</div>
+            </div>
+            <div class="action-pad">
+                <div class="btn" id="btn-jump">▲</div>
+                <div class="btn" id="btn-atk" style="border-color:#ff0055; color:#ff0055;">ATK</div>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const gravity = 0.8;
+        let gameState = 'MENU'; // MENU, PLAYING, OVER
+        let animationId;
+
+        class Fighter {
+            constructor({ x, y, color, isAI }) {
+                this.x = x; this.y = y;
+                this.width = 50; this.height = 150;
+                this.color = color;
+                this.vx = 0; this.vy = 0;
+                this.health = 100;
+                this.isAttacking = false;
+                this.isAI = isAI;
+            }
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.shadowBlur = 20; ctx.shadowColor = this.color;
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                
+                if (this.isAttacking) {
+                    ctx.fillStyle = 'white';
+                    // Attack box direction depends on who it is
+                    let ax = this.isAI ? this.x - 60 : this.x + 50;
+                    ctx.fillRect(ax, this.y + 20, 60, 40);
+                }
+                ctx.shadowBlur = 0;
+            }
+            update() {
+                this.draw();
+                this.x += this.vx; this.y += this.vy;
+                if (this.y + this.height + this.vy >= canvas.height - 50) {
+                    this.vy = 0; this.y = canvas.height - this.height - 50;
+                } else this.vy += gravity;
+                
+                // Keep in bounds
+                if (this.x < 0) this.x = 0;
+                if (this.x + this.width > canvas.width) this.x = canvas.width - this.width;
+            }
+            attack() {
+                if(this.isAttacking) return;
+                this.isAttacking = true;
+                setTimeout(() => this.isAttacking = false, 150);
+            }
+        }
+
+        let player, enemy;
+
+        // Controls State
+        const keys = { left: false, right: false, jump: false, attack: false };
+
+        // Desktop Keyboard
+        window.onkeydown = e => {
+            if(e.key === 'a') keys.left = true;
+            if(e.key === 'd') keys.right = true;
+            if(e.key === 'w' && player.vy === 0) keys.jump = true;
+            if(e.key === ' ') keys.attack = true;
+        };
+        window.onkeyup = e => {
+            if(e.key === 'a') keys.left = false;
+            if(e.key === 'd') keys.right = false;
+            if(e.key === 'w') keys.jump = false;
+            if(e.key === ' ') keys.attack = false;
+        };
+
+        // Mobile Touch
+        const bindTouch = (id, key) => {
+            const el = document.getElementById(id);
+            el.ontouchstart = (e) => { e.preventDefault(); keys[key] = true; };
+            el.ontouchend = (e) => { e.preventDefault(); keys[key] = false; };
+        };
+        bindTouch('btn-left', 'left'); bindTouch('btn-right', 'right');
+        bindTouch('btn-jump', 'jump'); bindTouch('btn-atk', 'attack');
+
+        function checkHit(attacker, defender) {
+            let ax = attacker.isAI ? attacker.x - 60 : attacker.x + 50;
+            return (ax < defender.x + defender.width && ax + 60 > defender.x &&
+                    attacker.y + 20 < defender.y + defender.height && attacker.y + 60 > defender.y);
+        }
+
+        function runAI() {
+            // Simple AI: Move towards player, attack if close
+            const dist = player.x - enemy.x;
+            if (Math.abs(dist) > 80) {
+                enemy.vx = dist > 0 ? 3 : -3; // Move towards player
+            } else {
+                enemy.vx = 0;
+                if (Math.random() < 0.05) enemy.attack(); // 5% chance to attack per frame when close
+            }
+            if (Math.random() < 0.01 && enemy.vy === 0) enemy.vy = -15; // Random jumps
+        }
+
+        function animate() {
+            if (gameState !== 'PLAYING') return;
+            animationId = requestAnimationFrame(animate);
+
+            ctx.fillStyle = '#1a1a2e';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Floor
+            ctx.fillStyle = '#00f3ff';
+            ctx.fillRect(0, canvas.height - 50, canvas.width, 5);
+
+            // Player logic
+            player.vx = 0;
+            if (keys.left) player.vx = -6;
+            if (keys.right) player.vx = 6;
+            if (keys.jump && player.vy === 0) player.vy = -18;
+            if (keys.attack) { player.attack(); keys.attack = false; } // trigger once
+
+            // AI Logic
+            runAI();
+
+            player.update();
+            enemy.update();
+
+            // Combat Math
+            if (player.isAttacking && checkHit(player, enemy)) {
+                enemy.health -= 1; 
+                document.getElementById('p2-health').style.width = Math.max(0, enemy.health) + '%';
+            }
+            if (enemy.isAttacking && checkHit(enemy, player)) {
+                player.health -= 1;
+                document.getElementById('p1-health').style.width = Math.max(0, player.health) + '%';
+            }
+
+            // Win Condition
+            if (player.health <= 0 || enemy.health <= 0) {
+                gameState = 'OVER';
+                document.getElementById('game-ui').style.display = 'none';
+                document.getElementById('game-over-screen').style.display = 'flex';
+                document.getElementById('winner-text').innerText = player.health <= 0 ? "ENEMY WINS" : "YOU WIN!";
+            }
+        }
+
+        function startGame() {
+            document.getElementById('start-screen').style.display = 'none';
+            document.getElementById('game-over-screen').style.display = 'none';
+            document.getElementById('game-ui').style.display = 'block';
+            
+            // Show mobile controls if touch device
+            if ('ontouchstart' in window) document.getElementById('mobile-controls').style.display = 'flex';
+
+            player = new Fighter({ x: 100, y: 100, color: '#ff0055', isAI: false });
+            enemy = new Fighter({ x: canvas.width - 150, y: 100, color: '#00f3ff', isAI: true });
+            
+            document.getElementById('p1-health').style.width = '100%';
+            document.getElementById('p2-health').style.width = '100%';
+            
+            gameState = 'PLAYING';
+            animate();
+        }
+
+        function resetGame() { startGame(); }
+        
+        // Handle screen resize
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+    </script>
+</body>
+  </html>
+  
